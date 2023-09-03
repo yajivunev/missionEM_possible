@@ -1,0 +1,11 @@
+__pycache__
+*tar
+*zarr
+*log*
+snapshots
+*swp
+*tiff*
+old
+*png
+*zip
+*results*
