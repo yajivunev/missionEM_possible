@@ -23,7 +23,7 @@ def predict(iteration,raw_file,raw_ds,out_file):
     model.eval()
     
     input_shape = gp.Coordinate((12, 260, 260))
-    output_shape = gp.Coordinate((4, 220, 220))
+    output_shape = gp.Coordinate((4, 168, 168))
 #    increase = gp.Coordinate((20,200,200))
 #    input_shape += increase
 #    output_shape += increase
@@ -59,8 +59,8 @@ def predict(iteration,raw_file,raw_ds,out_file):
         )
 
     with gp.build(source):
-        total_output_roi = source.spec[raw].roi
-        total_input_roi = source.spec[raw].roi.grow(context,context)
+        total_input_roi = source.spec[raw].roi
+        total_output_roi = source.spec[raw].roi.grow(-context,-context)
 
     prepare_ds(
             out_file,
@@ -90,6 +90,34 @@ def predict(iteration,raw_file,raw_ds,out_file):
             delete=True,
             num_channels=3)
 
+    prepare_ds(
+            out_file,
+            out_ds_endo_lsds,
+            gp.Roi(
+                total_output_roi.get_offset(),
+                total_output_roi.get_shape()
+            ),
+            voxel_size,
+            np.uint8,
+            write_size=output_size,
+            compressor={'id': 'blosc', 'clevel': 3},
+            delete=True,
+            num_channels=10)
+
+    prepare_ds(
+            out_file,
+            out_ds_lyso_lsds,
+            gp.Roi(
+                total_output_roi.get_offset(),
+                total_output_roi.get_shape()
+            ),
+            voxel_size,
+            np.uint8,
+            write_size=output_size,
+            compressor={'id': 'blosc', 'clevel': 3},
+            delete=True,
+            num_channels=10)
+
     unsqueeze = gp.Unsqueeze([raw], axis=0)
     unsqueeze += gp.Unsqueeze([raw], axis=0)
 
@@ -113,6 +141,8 @@ def predict(iteration,raw_file,raw_ds,out_file):
             dataset_names={
                 pred_endo_affs: out_ds_endo_affs,
                 pred_lyso_affs: out_ds_lyso_affs,
+                pred_endo_lsds: out_ds_endo_lsds,
+                pred_lyso_lsds: out_ds_lyso_lsds,
             },
             store=out_file)
 
@@ -124,9 +154,12 @@ def predict(iteration,raw_file,raw_ds,out_file):
             gp.Unsqueeze([raw]) +
             predict +
             gp.Squeeze([raw,pred_endo_affs,pred_lyso_affs]) +
+            gp.Squeeze([pred_endo_lsds,pred_lyso_lsds]) +
             gp.Squeeze([raw]) +
             gp.IntensityScaleShift(pred_endo_affs, 255, 0) +
             gp.IntensityScaleShift(pred_lyso_affs, 255, 0) +
+            gp.IntensityScaleShift(pred_endo_lsds, 255, 0) +
+            gp.IntensityScaleShift(pred_lyso_lsds, 255, 0) +
             write+
             scan)
 
@@ -134,6 +167,8 @@ def predict(iteration,raw_file,raw_ds,out_file):
     predict_request[raw] = total_input_roi
     predict_request[pred_endo_affs] = total_output_roi
     predict_request[pred_lyso_affs] = total_output_roi
+    predict_request[pred_endo_lsds] = total_output_roi
+    predict_request[pred_lyso_lsds] = total_output_roi
 
     with gp.build(pipeline):
         pipeline.request_batch(predict_request)

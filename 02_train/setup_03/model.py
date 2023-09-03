@@ -2,8 +2,8 @@ from funlib.learn.torch.models import UNet, ConvPass
 import torch
 
 
-num_fmaps = 6
-fmap_inc_factor = 3
+num_fmaps = 10
+fmap_inc_factor = 5
 
 class Model(torch.nn.Module):
 
@@ -16,12 +16,15 @@ class Model(torch.nn.Module):
                 fmap_inc_factor=fmap_inc_factor,
                 downsample_factors=[
                     (1,2,2),
+                    (1,2,2),
                     (1,2,2)],
                 kernel_size_down=[
                     [[3,3,3],[3,3,3]],
                     [[1,3,3],[1,3,3]],
+                    [[1,3,3],[1,3,3]],
                     [[1,3,3],[1,3,3]]],
                 kernel_size_up=[
+                    [[1,3,3],[1,3,3]],
                     [[1,3,3],[1,3,3]],
                     [[3,3,3],[3,3,3]]],
                 constant_upsample=True,

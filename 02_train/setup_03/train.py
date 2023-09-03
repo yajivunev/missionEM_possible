@@ -10,8 +10,10 @@ from model import Model
 
 logging.basicConfig(level=logging.INFO)
 
-input_shape = (12, 240, 240)
-voxel_size = gp.Coordinate([70, 24, 24])
+input_shape = (12, 260, 260)
+voxel_size = gp.Coordinate([70,24,24])
+
+sigma = 240
 
 lr = 1e-4
 batch_size = 1
@@ -24,6 +26,23 @@ training_zarrs = [
         "TRAIN_4.zarr",
         "TRAIN_5.zarr",
 ]
+
+
+def calc_max_padding(output_size, voxel_size, sigma, mode="shrink"):
+
+    method_padding = gp.Coordinate((sigma * 3,) * 3)
+
+    diag = np.sqrt(output_size[1] ** 2 + output_size[2] ** 2)
+
+    max_padding = gp.Roi(
+        (
+            gp.Coordinate([i / 2 for i in [output_size[0], diag, diag]])
+            + method_padding
+        ),
+        (0,) * 3,
+    ).snap_to_grid(voxel_size, mode=mode)
+
+    return max_padding.get_begin()
 
 
 class WeightedMSELoss(torch.nn.Module):
@@ -78,7 +97,8 @@ def train_until(iterations):
     print(output_shape)
     input_size = gp.Coordinate(input_shape) * voxel_size
     output_size = gp.Coordinate(output_shape) * voxel_size
-    context = (input_size - output_size) * 2
+    context = calc_max_padding(output_size, voxel_size, sigma)
+
 
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -115,10 +135,10 @@ def train_until(iterations):
                 mask: 'mask/s2'
             },
             {
-                raw: gp.ArraySpec(interpolatable=True),
-                labels_endo: gp.ArraySpec(interpolatable=False),
-                labels_lyso: gp.ArraySpec(interpolatable=False),
-                mask: gp.ArraySpec(interpolatable=False),
+                raw: gp.ArraySpec(interpolatable=True),#, voxel_size=voxel_size),
+                labels_endo: gp.ArraySpec(interpolatable=False),#, voxel_size=voxel_size),
+                labels_lyso: gp.ArraySpec(interpolatable=False),#, voxel_size=voxel_size),
+                mask: gp.ArraySpec(interpolatable=False),#, voxel_size=voxel_size),
             }
         ) + 
         gp.Normalize(raw) +
@@ -131,24 +151,38 @@ def train_until(iterations):
 
     sources += gp.RandomProvider()
 
+    simple_augment = gp.SimpleAugment(transpose_only=[1,2])
+    deform_augment = gp.ElasticAugment(
+        control_point_spacing=(1, 24, 24),
+        jitter_sigma=(0, 1, 1),
+        rotation_interval=(0,math.pi/2),
+        scale_interval=(0.9, 1.1),
+        subsample=2)
+    intensity_augment = gp.IntensityAugment(
+        raw,
+        scale_min=0.9,
+        scale_max=1.1,
+        shift_min=-0.01,
+        shift_max=0.01)
+
     add_lsds = AddLocalShapeDescriptor(
             labels_endo,
             gt_endo_lsds,
-            sigma=240,
+            sigma=sigma,
             lsds_mask=gt_endo_lsds_mask,
             labels_mask=mask,
-            downsample=1)
+            downsample=2)
     add_lsds += AddLocalShapeDescriptor(
             labels_lyso,
             gt_lyso_lsds,
-            sigma=240,
+            sigma=sigma,
             lsds_mask=gt_lyso_lsds_mask,
             labels_mask=mask,
-            downsample=1)
+            downsample=2)
 
     erode_labels = gp.GrowBoundary(labels_endo, steps=1, only_xy=True)
     erode_labels += gp.GrowBoundary(labels_lyso, steps=1, only_xy=True)
-
+    
     add_affs = gp.AddAffinities(
             affinity_neighborhood=[[-1,0,0],[0,-1,0],[0,0,-1]],
             labels=labels_endo,
@@ -161,20 +195,6 @@ def train_until(iterations):
             affinities=gt_lyso_affs,
             labels_mask=mask,
             affinities_mask=gt_lyso_affs_mask)
-
-    simple_augment = gp.SimpleAugment(transpose_only=[1,2])
-    deform_augment = gp.ElasticAugment(
-        control_point_spacing=(1, 24, 24),
-        jitter_sigma=(0, 1.0, 1.0),
-        rotation_interval=(0,math.pi/2),
-        scale_interval=(0.9, 1.1),
-        subsample=4)
-    intensity_augment = gp.IntensityAugment(
-        raw,
-        scale_min=0.9,
-        scale_max=1.1,
-        shift_min=-0.01,
-        shift_max=0.01)
 
     balance_labels = gp.BalanceLabels(gt_endo_affs, weights_endo_affs, mask=gt_endo_affs_mask)
     balance_labels += gp.BalanceLabels(gt_lyso_affs, weights_lyso_affs, mask=gt_lyso_affs_mask)
@@ -213,17 +233,19 @@ def train_until(iterations):
         log_dir="log",
         save_every=1000)
 
-    squeeze = gp.Squeeze([raw, gt_endo_affs, gt_lyso_affs, weights_endo_affs, weights_lyso_affs, gt_endo_lsds, gt_lyso_lsds, gt_endo_lsds_mask, gt_lyso_lsds_mask], axis=0)
-    squeeze += gp.Squeeze([raw], axis=0)
+    #squeeze = gp.Squeeze([raw, gt_endo_affs, gt_lyso_affs, weights_endo_affs, weights_lyso_affs, gt_endo_lsds, gt_lyso_lsds, gt_endo_lsds_mask, gt_lyso_lsds_mask], axis=0)
+    squeeze = gp.Squeeze([raw, gt_endo_affs, gt_lyso_affs, gt_endo_lsds, gt_lyso_lsds], axis=0)
+    squeeze = gp.Squeeze([raw, pred_endo_affs, pred_lyso_affs, pred_endo_lsds, pred_lyso_lsds], axis=0)
+    #squeeze += gp.Squeeze([raw], axis=0)
 
     snapshot = gp.Snapshot(
         {
             raw: 'raw',
-            labels_endo: 'labels_endo',
-            labels_lyso: 'labels_lyso',
-            mask: 'mask',
-            weights_endo_affs: 'weights_endo_affs',
-            weights_lyso_affs: 'weights_lyso_affs',
+#            labels_endo: 'labels_endo',
+#            labels_lyso: 'labels_lyso',
+#            mask: 'mask',
+#            weights_endo_affs: 'weights_endo_affs',
+#            weights_lyso_affs: 'weights_lyso_affs',
             gt_endo_affs: 'gt_endo_affs',
             gt_lyso_affs: 'gt_lyso_affs',
             pred_endo_affs: 'pred_endo_affs',
@@ -232,8 +254,8 @@ def train_until(iterations):
             gt_lyso_lsds: 'gt_lyso_lsds',
             pred_endo_lsds: 'pred_endo_lsds',
             pred_lyso_lsds: 'pred_lyso_lsds',
-            gt_endo_lsds_mask: 'gt_endo_lsds_mask',
-            gt_lyso_lsds_mask: 'gt_lyso_lsds_mask',
+#            gt_endo_lsds_mask: 'gt_endo_lsds_mask',
+#            gt_lyso_lsds_mask: 'gt_lyso_lsds_mask',
         },
         output_dir='snapshots',
         output_filename='batch_{iteration}.zarr',
@@ -241,12 +263,12 @@ def train_until(iterations):
 
     pipeline = (
         sources +
-        add_lsds +
-        erode_labels +
-        add_affs +
         simple_augment +
         deform_augment +
         intensity_augment +
+        add_lsds +
+        erode_labels +
+        add_affs +
         balance_labels +
         unsqueeze +
         stack +
@@ -280,4 +302,4 @@ def train_until(iterations):
 
 if __name__ == "__main__":
 
-    train_until(10000)
+    train_until(100000)
